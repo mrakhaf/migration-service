@@ -1,0 +1,44 @@
+# Go binaries
+*.exe
+*.out
+*.test
+
+# Build artifacts
+bin/
+dist/
+obj/
+target/
+build/
+
+# Go modules
+go.sum
+*.mod
+
+# Environment files
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Storage directory (for uploaded files)
+storage/files/
+
+# Coverage
+coverage/
+*.cov
+.coverage
