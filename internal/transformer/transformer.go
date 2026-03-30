@@ -22,25 +22,27 @@ func NewTransformer(logger *logrus.Logger) *Transformer {
 }
 
 // TransformBatch transforms a batch of source patients to target patients
-func (t *Transformer) TransformBatch(sourcePatients []model.SourcePatient) ([]model.TargetPatient, []error) {
+func (t *Transformer) TransformBatch(sourcePatients []model.SourcePatient) ([]model.TargetPatient, []error, []model.SourcePatient) {
 	if len(sourcePatients) == 0 {
-		return []model.TargetPatient{}, []error{}
+		return []model.TargetPatient{}, []error{}, []model.SourcePatient{}
 	}
 
 	targetPatients := make([]model.TargetPatient, 0, len(sourcePatients))
 	errors := make([]error, 0)
+	errorDatas := make([]model.SourcePatient, 0)
 
 	for _, source := range sourcePatients {
 		target, err := t.Transform(source)
 		if err != nil {
 			errors = append(errors, fmt.Errorf("failed to transform patient ID %d: %w", source.IDPasien, err))
+			errorDatas = append(errorDatas, source)
 			continue
 		}
 		targetPatients = append(targetPatients, target)
 	}
 
 	t.logger.Infof("Transformed %d patients, %d errors", len(targetPatients), len(errors))
-	return targetPatients, errors
+	return targetPatients, errors, errorDatas
 }
 
 // Transform transforms a single source patient to target patient

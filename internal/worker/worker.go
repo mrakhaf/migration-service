@@ -17,16 +17,18 @@ type Worker struct {
 	ID          int
 	source      *repository.SourceRepository
 	target      *repository.TargetRepository
+	dlq         *repository.DLQRepository
 	transformer *transformer.Transformer
 	logger      *logrus.Logger
 }
 
 // NewWorker creates a new worker
-func NewWorker(id int, source *repository.SourceRepository, target *repository.TargetRepository, transformer *transformer.Transformer, logger *logrus.Logger) *Worker {
+func NewWorker(id int, source *repository.SourceRepository, target *repository.TargetRepository, dlq *repository.DLQRepository, transformer *transformer.Transformer, logger *logrus.Logger) *Worker {
 	return &Worker{
 		ID:          id,
 		source:      source,
 		target:      target,
+		dlq:         dlq,
 		transformer: transformer,
 		logger:      logger,
 	}
@@ -48,16 +50,36 @@ func (w *Worker) ProcessBatch(ctx context.Context, lastID, batchSize int) (*mode
 	}
 
 	// Transform data
-	targetPatients, transformErrors := w.transformer.TransformBatch(sourcePatients)
+	targetPatients, transformErrors, errorDatas := w.transformer.TransformBatch(sourcePatients)
 	if len(transformErrors) > 0 {
 		w.logger.Warnf("Worker %d: %d transformation errors", w.ID, len(transformErrors))
+
+		// Insert failed records into DLQ
+		for i, err := range transformErrors {
+			if i < len(errorDatas) {
+				// Insert the original source patient data into DLQ
+				dlqErr := w.dlq.InsertDLQ(ctx, errorDatas[i], err.Error(), 0)
+				if dlqErr != nil {
+					w.logger.Errorf("Worker %d: Failed to insert record into DLQ: %v", w.ID, dlqErr)
+				}
+			}
+		}
 	}
 
 	// Filter out invalid patients
 	validPatients := make([]model.TargetPatient, 0, len(targetPatients))
+	validationErrors := make([]error, 0)
+
 	for _, patient := range targetPatients {
 		if err := w.transformer.ValidateTargetPatient(patient); err != nil {
 			w.logger.Warnf("Worker %d: Invalid patient data: %v", w.ID, err)
+
+			dlqErr := w.dlq.InsertDLQ(ctx, patient, err.Error(), 0)
+			if dlqErr != nil {
+				w.logger.Errorf("Worker %d: Failed to insert record into DLQ: %v", w.ID, dlqErr)
+			}
+
+			validationErrors = append(validationErrors, err)
 			continue
 		}
 		validPatients = append(validPatients, patient)
@@ -69,7 +91,7 @@ func (w *Worker) ProcessBatch(ctx context.Context, lastID, batchSize int) (*mode
 			SuccessCount: 0,
 			FailureCount: len(sourcePatients),
 			LastID:       sourcePatients[len(sourcePatients)-1].IDPasien,
-			Errors:       transformErrors,
+			Errors:       append(transformErrors, validationErrors...),
 		}, nil
 	}
 
@@ -82,9 +104,9 @@ func (w *Worker) ProcessBatch(ctx context.Context, lastID, batchSize int) (*mode
 	lastID = sourcePatients[len(sourcePatients)-1].IDPasien
 	result := &model.BatchResult{
 		SuccessCount: len(validPatients),
-		FailureCount: len(sourcePatients) - len(validPatients) + len(transformErrors),
+		FailureCount: len(sourcePatients) - len(validPatients),
 		LastID:       lastID,
-		Errors:       transformErrors,
+		Errors:       append(transformErrors, validationErrors...),
 	}
 
 	w.logger.Infof("Worker %d: Successfully processed batch, last ID: %d, success: %d, failed: %d",
@@ -98,21 +120,23 @@ type WorkerPool struct {
 	workers     []*Worker
 	source      *repository.SourceRepository
 	target      *repository.TargetRepository
+	dlq         *repository.DLQRepository
 	transformer *transformer.Transformer
 	logger      *logrus.Logger
 }
 
 // NewWorkerPool creates a new worker pool
-func NewWorkerPool(workerCount int, source *repository.SourceRepository, target *repository.TargetRepository, transformer *transformer.Transformer, logger *logrus.Logger) *WorkerPool {
+func NewWorkerPool(workerCount int, source *repository.SourceRepository, target *repository.TargetRepository, dlq *repository.DLQRepository, transformer *transformer.Transformer, logger *logrus.Logger) *WorkerPool {
 	workers := make([]*Worker, workerCount)
 	for i := 0; i < workerCount; i++ {
-		workers[i] = NewWorker(i+1, source, target, transformer, logger)
+		workers[i] = NewWorker(i+1, source, target, dlq, transformer, logger)
 	}
 
 	return &WorkerPool{
 		workers:     workers,
 		source:      source,
 		target:      target,
+		dlq:         dlq,
 		transformer: transformer,
 		logger:      logger,
 	}

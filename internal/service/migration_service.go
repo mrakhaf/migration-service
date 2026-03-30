@@ -73,6 +73,7 @@ func NewMigrationService(cfg *config.Config, logger *logrus.Logger) (*MigrationS
 		cfg.Migration.WorkerCount,
 		sourceRepo,
 		targetRepo,
+		dlqRepo,
 		transformer,
 		logger,
 	)
